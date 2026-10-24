@@ -101,9 +101,21 @@ func (d *proxyHostDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 				Computed:    true,
 				Description: "Advanced NGINX config.",
 			},
+			"trust_forwarded_proto": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether the X-Forwarded-Proto header from an upstream proxy is trusted.",
+			},
 			"owner_user_id": schema.Int64Attribute{
 				Computed:    true,
 				Description: "ID of the user who owns the proxy host.",
+			},
+			"nginx_online": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether nginx accepted the config generated for this host on the last change.",
+			},
+			"nginx_err": schema.StringAttribute{
+				Computed:    true,
+				Description: "The error nginx reported for this host's config, if any.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -124,7 +136,19 @@ func (d *proxyHostDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 						},
 						"path": schema.StringAttribute{
 							Computed:    true,
-							Description: "Path on the forward host.",
+							Description: "Path matched by the location.",
+						},
+						"forward_path": schema.StringAttribute{
+							Computed:    true,
+							Description: "Path on the forward host the request is sent to.",
+						},
+						"advanced_config": schema.StringAttribute{
+							Computed:    true,
+							Description: "Advanced NGINX config for this location.",
+						},
+						"access_list_id": schema.Int64Attribute{
+							Computed:    true,
+							Description: "ID of the access list for this location.",
 						},
 					},
 				},
@@ -160,37 +184,7 @@ func (d *proxyHostDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	state.OwnerUserID = types.Int64Value(int64(proxyHost.OwnerUserID))
-	state.ForwardScheme = types.StringValue(*proxyHost.ForwardScheme)
-	state.DomainNames = []types.String{}
-	state.ForwardHost = types.StringValue(*proxyHost.ForwardHost)
-	state.ForwardPort = types.Int64Value(int64(*proxyHost.ForwardPort))
-	state.AccessListID = types.Int64Value(int64(*proxyHost.AccessListID))
-	state.CertificateID = types.Int64Value(int64(*proxyHost.CertificateID))
-	state.SSLForced = types.BoolValue(*proxyHost.SSLForced)
-	state.AdvancedConfig = types.StringValue(*proxyHost.AdvancedConfig)
-	state.CachingEnabled = types.BoolValue(*proxyHost.CachingEnabled)
-	state.BlockExploits = types.BoolValue(*proxyHost.BlockExploits)
-	state.AllowWebsocketUpgrade = types.BoolValue(*proxyHost.AllowWebsocketUpgrade)
-	state.HTTP2Support = types.BoolValue(*proxyHost.HTTP2Support)
-	state.Enabled = types.BoolValue(*proxyHost.Enabled)
-	state.Locations = []models.ProxyHostLocationModel{}
-	state.HSTSEnabled = types.BoolValue(*proxyHost.HSTSEnabled)
-	state.HSTSSubdomains = types.BoolValue(*proxyHost.HSTSSubdomains)
-
-	for _, location := range *proxyHost.Locations {
-		planLocation := models.ProxyHostLocationModel{
-			ForwardScheme: types.StringValue(location.ForwardScheme),
-			ForwardHost:   types.StringValue(location.ForwardHost),
-			ForwardPort:   types.Int64Value(int64(location.ForwardPort)),
-			Path:          types.StringValue(location.Path),
-		}
-		state.Locations = append(state.Locations, planLocation)
-	}
-
-	for _, domainName := range *proxyHost.DomainNames {
-		state.DomainNames = append(state.DomainNames, types.StringValue(domainName))
-	}
+	state.FromAPI(proxyHost)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)

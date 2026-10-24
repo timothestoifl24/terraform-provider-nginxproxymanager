@@ -6,20 +6,18 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
-	utils "github.com/edklesel/terraform-provider-nginxproxymanager/internal/utils"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
 
 var (
@@ -45,7 +43,7 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "ID of the proxy host.",
+				Description: "ID of the stream.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -57,10 +55,16 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"forwarding_port": schema.Int64Attribute{
 				Required:    true,
 				Description: "Port to forward the stream to.",
+				Validators: []validator.Int64{
+					int64validator.Between(1, 65535),
+				},
 			},
 			"incoming_port": schema.Int64Attribute{
 				Required:    true,
 				Description: "Port the request is coming in on.",
+				Validators: []validator.Int64{
+					int64validator.Between(1, 65535),
+				},
 			},
 			"tcp_forwarding": schema.BoolAttribute{
 				Optional:    true,
@@ -73,6 +77,12 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Computed:    true,
 				Description: "Whether to enable UDP Forwarding",
 				Default:     booldefault.StaticBool(false),
+			},
+			"enabled": schema.BoolAttribute{
+				Optional:    true,
+				Computed:    true,
+				Description: "Enable or disable the stream.",
+				Default:     booldefault.StaticBool(true),
 			},
 			"owner_user_id": schema.Int64Attribute{
 				Computed:    true,
@@ -87,22 +97,12 @@ func (r *streamResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 
 func (r *streamResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan models.StreamModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	var _stream = sdk.StreamBase{
-		ForwardingHost: plan.ForwardingHost.ValueStringPointer(),
-		ForwardingPort: utils.ReturnPointer(int(plan.ForwardingPort.ValueInt64())),
-		IncomingPort:   utils.ReturnPointer(int(plan.IncomingPort.ValueInt64())),
-		TCPForwarding:  plan.TCPForwarding.ValueBoolPointer(),
-		UDPForwarding:  plan.UDPForwarding.ValueBoolPointer(),
-	}
-
-	stream, err := r.client.Streams.Create(_stream)
+	created, err := r.client.Streams.Create(plan.ToAPI())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating stream.",
@@ -111,90 +111,60 @@ func (r *streamResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(stream.ID))
-	plan.OwnerUserID = types.Int64Value(int64(stream.OwnerUserID))
-	plan.ForwardingHost = types.StringValue(*stream.ForwardingHost)
-	plan.ForwardingPort = types.Int64Value(int64(*stream.ForwardingPort))
-	plan.IncomingPort = types.Int64Value(int64(*stream.IncomingPort))
-	plan.TCPForwarding = types.BoolValue(*stream.TCPForwarding)
-	plan.UDPForwarding = types.BoolValue(*stream.UDPForwarding)
+	// From here on the stream exists, so it's always saved to state, even if
+	// the remaining steps fail. Terraform then marks it as tainted.
+	var state models.StreamModel
+	state.FromAPI(created)
+	defer func() { resp.Diagnostics.Append(resp.State.Set(ctx, &state)...) }()
 
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
+	if !applyEnabled(r.client.Streams, created.ID, true, plan.Enabled, "stream", &resp.Diagnostics) {
 		return
 	}
+
+	obj, err := r.client.Streams.Get(created.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading stream after creating it.", err.Error())
+		return
+	}
+	state.FromAPI(obj)
+	warnIfNginxOfflineMeta(obj.Meta, "stream", &resp.Diagnostics)
 }
 
 func (r *streamResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-
 	var state models.StreamModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+
+	obj, err := r.client.Streams.Get(id)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "stream", state.ID, err)
 		return
 	}
 
-	stream, err := r.client.Streams.Get(id)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read stream with ID %s.", state.ID.ValueString()),
-			err.Error(),
-		)
-		return
-	}
-
-	state.ID = types.StringValue(strconv.Itoa(stream.ID))
-	state.OwnerUserID = types.Int64Value(int64(stream.OwnerUserID))
-	state.ForwardingHost = types.StringValue(*stream.ForwardingHost)
-	state.ForwardingPort = types.Int64Value(int64(*stream.ForwardingPort))
-	state.IncomingPort = types.Int64Value(int64(*stream.IncomingPort))
-	state.TCPForwarding = types.BoolValue(*stream.TCPForwarding)
-	state.UDPForwarding = types.BoolValue(*stream.UDPForwarding)
-
-	diags = resp.State.Set(ctx, &state)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	state.FromAPI(obj)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *streamResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan models.StreamModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(plan.ID.ValueString())
-	if err != nil {
-		diags.AddError(
-			"Unable to parse ID from plan",
-			fmt.Sprintf("Error received when parsing ID value from plan: %s", err),
-		)
+	id, ok := parseID(plan.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	var _stream = sdk.StreamBase{
-		ForwardingHost: plan.ForwardingHost.ValueStringPointer(),
-		ForwardingPort: utils.ReturnPointer(int(plan.ForwardingPort.ValueInt64())),
-		IncomingPort:   utils.ReturnPointer(int(plan.IncomingPort.ValueInt64())),
-		TCPForwarding:  plan.TCPForwarding.ValueBoolPointer(),
-		UDPForwarding:  plan.UDPForwarding.ValueBoolPointer(),
-	}
-
-	stream, err := r.client.Streams.Update(id, _stream)
+	updated, err := r.client.Streams.Update(id, plan.ToAPI())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating stream.",
@@ -203,41 +173,37 @@ func (r *streamResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(stream.ID))
-	plan.OwnerUserID = types.Int64Value(int64(stream.OwnerUserID))
-	plan.ForwardingHost = types.StringValue(*stream.ForwardingHost)
-	plan.ForwardingPort = types.Int64Value(int64(*stream.ForwardingPort))
-	plan.IncomingPort = types.Int64Value(int64(*stream.IncomingPort))
-	plan.TCPForwarding = types.BoolValue(*stream.TCPForwarding)
-	plan.UDPForwarding = types.BoolValue(*stream.UDPForwarding)
-
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
+	enabled := updated.Enabled != nil && *updated.Enabled
+	if !applyEnabled(r.client.Streams, id, enabled, plan.Enabled, "stream", &resp.Diagnostics) {
 		return
 	}
+
+	obj, err := r.client.Streams.Get(id)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading stream after updating it.", err.Error())
+		return
+	}
+
+	var state models.StreamModel
+	state.FromAPI(obj)
+	warnIfNginxOfflineMeta(obj.Meta, "stream", &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *streamResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-
 	var state models.StreamModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	err = r.client.Streams.Delete(id)
-	if err != nil {
+	err := r.client.Streams.Delete(id)
+	if err != nil && !sdk.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting stream",
 			fmt.Sprintf("Unable to delete stream, unexpected error: %s", err.Error()),
@@ -250,5 +216,5 @@ func (r *streamResource) Configure(_ context.Context, req resource.ConfigureRequ
 }
 
 func (r *streamResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importNumericID(ctx, req, resp)
 }

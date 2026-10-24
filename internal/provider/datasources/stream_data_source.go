@@ -13,7 +13,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
@@ -60,6 +59,10 @@ func (r *streamDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 				Computed:    true,
 				Description: "Whether UDP Forwarding is enabled.",
 			},
+			"enabled": schema.BoolAttribute{
+				Computed:    true,
+				Description: "Whether the stream is enabled.",
+			},
 			"owner_user_id": schema.Int64Attribute{
 				Computed:    true,
 				Description: "ID of the user who owns the stream.",
@@ -95,13 +98,7 @@ func (r *streamDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		return
 	}
 
-	state.ID = types.StringValue(strconv.Itoa(stream.ID))
-	state.OwnerUserID = types.Int64Value(int64(stream.OwnerUserID))
-	state.ForwardingHost = types.StringValue(*stream.ForwardingHost)
-	state.ForwardingPort = types.Int64Value(int64(*stream.ForwardingPort))
-	state.IncomingPort = types.Int64Value(int64(*stream.IncomingPort))
-	state.TCPForwarding = types.BoolValue(*stream.TCPForwarding)
-	state.UDPForwarding = types.BoolValue(*stream.UDPForwarding)
+	state.FromAPI(stream)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)

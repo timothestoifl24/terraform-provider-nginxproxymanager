@@ -128,24 +128,7 @@ func (d *redirectionHostDataSource) Read(ctx context.Context, req datasource.Rea
 		return
 	}
 
-	state.OwnerUserID = types.Int64Value(int64(redirectionHost.OwnerUserID))
-	state.ForwardScheme = types.StringValue(*redirectionHost.ForwardScheme)
-	state.DomainNames = []types.String{}
-	state.ForwardDomainName = types.StringValue(*redirectionHost.ForwardDomainName)
-	state.ForwardHTTPCode = types.Int64Value(int64(*redirectionHost.ForwardHTTPCode))
-	state.CertificateID = types.Int64Value(int64(*redirectionHost.CertificateID))
-	state.SSLForced = types.BoolValue(*redirectionHost.SSLForced)
-	state.AdvancedConfig = types.StringValue(*redirectionHost.AdvancedConfig)
-	state.BlockExploits = types.BoolValue(*redirectionHost.BlockExploits)
-	state.HTTP2Support = types.BoolValue(*redirectionHost.HTTP2Support)
-	state.Enabled = types.BoolValue(*redirectionHost.Enabled)
-	state.HSTSEnabled = types.BoolValue(*redirectionHost.HSTSEnabled)
-	state.HSTSSubdomains = types.BoolValue(*redirectionHost.HSTSSubdomains)
-	state.PreservePath = types.BoolValue(*redirectionHost.PreservePath)
-
-	for _, domainName := range *redirectionHost.DomainNames {
-		state.DomainNames = append(state.DomainNames, types.StringValue(domainName))
-	}
+	state.FromAPI(redirectionHost)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)

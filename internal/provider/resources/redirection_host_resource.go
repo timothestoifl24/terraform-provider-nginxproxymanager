@@ -6,14 +6,13 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
-	utils "github.com/edklesel/terraform-provider-nginxproxymanager/internal/utils"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
-	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -61,18 +60,24 @@ func (r *redirectionHostResource) Schema(_ context.Context, _ resource.SchemaReq
 			},
 			"forward_scheme": schema.StringAttribute{
 				Required:    true,
-				Description: "Scheme to use when forwarding.",
+				Description: "Scheme to redirect with, `http`, `https` or `auto` to keep the scheme of the request.",
+				Validators: []validator.String{
+					stringvalidator.OneOf("auto", "http", "https"),
+				},
 			},
 			"forward_http_code": schema.Int64Attribute{
 				Required:    true,
-				Description: "HTTP code to redirect with.",
+				Description: "HTTP code to redirect with, between 300 and 308.",
+				Validators: []validator.Int64{
+					int64validator.Between(300, 308),
+				},
 			},
-			"domain_names": schema.ListAttribute{
+			"domain_names": schema.SetAttribute{
 				Required:    true,
-				Description: "Domain names to accept.",
+				Description: "Domain names to accept. NPM stores these sorted, so the order doesn't matter.",
 				ElementType: types.StringType,
-				Validators: []validator.List{
-					listvalidator.SizeAtLeast(1),
+				Validators: []validator.Set{
+					setvalidator.SizeAtLeast(1),
 				},
 			},
 			"certificate_id": schema.Int64Attribute{
@@ -149,71 +154,17 @@ func (r *redirectionHostResource) ValidateConfig(ctx context.Context, req resour
 		return
 	}
 
-	// ssl_forced and http2_upgrade require a certificate ID to be set
-	if data.CertificateID.IsNull() {
-		if data.SSLForced.ValueBool() {
-			resp.Diagnostics.AddAttributeError(
-				path.Root("ssl_forced"),
-				"ssl_forced cannot be true when no certificate_id is given",
-				"Forcing SSL requires a SSL Certificate to be set on the Redirection Host",
-			)
-		}
-		if data.HTTP2Support.ValueBool() {
-			resp.Diagnostics.AddAttributeError(
-				path.Root("http2_support"),
-				"http2_support cannot be true when no certificate_id is given",
-				"Enabling HTTP2 support requires a Certificate to be set",
-			)
-		}
-	}
-
-	// hsts_enabled depends on ssl_forced being true
-	if !data.SSLForced.ValueBool() && data.HSTSEnabled.ValueBool() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("hsts_enabled"),
-			"hsts_enabled cannot be true when ssl_forced is false",
-			"Enabling HSTS requires SSL to be forced",
-		)
-	}
-	// hsts_dubdomains depends on hsts_enabled being true
-	if !data.HSTSEnabled.ValueBool() && data.HSTSSubdomains.ValueBool() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("hsts_subdomains"),
-			"hsts_subdomains cannot be true when hsts_enabled is false",
-			"Enabling HSTS for Subdomains requires HSTS to be enabled",
-		)
-	}
+	validateSSLSettings(data.CertificateID, data.SSLForced, data.HTTP2Support, data.HSTSEnabled, data.HSTSSubdomains, &resp.Diagnostics)
 }
 
 func (r *redirectionHostResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan models.RedirectionHostModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	var _redirectionHost = sdk.RedirectionHostBase{
-		ForwardDomainName: plan.ForwardDomainName.ValueStringPointer(),
-		ForwardHTTPCode:   utils.ReturnPointer(int(plan.ForwardHTTPCode.ValueInt64())),
-		ForwardScheme:     plan.ForwardScheme.ValueStringPointer(),
-		DomainNames:       utils.ReturnPointer([]string{}),
-		CertificateID:     utils.ReturnPointer(int(plan.CertificateID.ValueInt64())),
-		SSLForced:         plan.SSLForced.ValueBoolPointer(),
-		BlockExploits:     plan.BlockExploits.ValueBoolPointer(),
-		AdvancedConfig:    plan.AdvancedConfig.ValueStringPointer(),
-		HTTP2Support:      plan.HTTP2Support.ValueBoolPointer(),
-		HSTSEnabled:       plan.HSTSEnabled.ValueBoolPointer(),
-		HSTSSubdomains:    plan.HSTSSubdomains.ValueBoolPointer(),
-		PreservePath:      plan.PreservePath.ValueBoolPointer(),
-	}
-
-	for _, domainName := range plan.DomainNames {
-		*_redirectionHost.DomainNames = append(*_redirectionHost.DomainNames, domainName.ValueString())
-	}
-
-	redirectionHost, err := r.client.RedirectionHosts.Create(_redirectionHost)
+	created, err := r.client.RedirectionHosts.Create(plan.ToAPI())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating redirection host.",
@@ -222,123 +173,60 @@ func (r *redirectionHostResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(redirectionHost.ID))
-	plan.OwnerUserID = types.Int64Value(int64(redirectionHost.OwnerUserID))
-	plan.DomainNames = []types.String{}
-	plan.ForwardDomainName = types.StringValue(*redirectionHost.ForwardDomainName)
-	plan.ForwardHTTPCode = types.Int64Value(int64(*redirectionHost.ForwardHTTPCode))
-	plan.ForwardScheme = types.StringValue(*redirectionHost.ForwardScheme)
-	plan.CertificateID = types.Int64Value(int64(*redirectionHost.CertificateID))
-	plan.SSLForced = types.BoolValue(*redirectionHost.SSLForced)
-	plan.AdvancedConfig = types.StringValue(*redirectionHost.AdvancedConfig)
-	plan.BlockExploits = types.BoolValue(*redirectionHost.BlockExploits)
-	plan.HTTP2Support = types.BoolValue(*redirectionHost.HTTP2Support)
-	plan.Enabled = types.BoolValue(*redirectionHost.Enabled)
-	plan.HSTSEnabled = types.BoolValue(*redirectionHost.HSTSEnabled)
-	plan.HSTSSubdomains = types.BoolValue(*redirectionHost.HSTSSubdomains)
-	plan.PreservePath = types.BoolValue(*redirectionHost.PreservePath)
+	// From here on the redirection host exists, so it's always saved to state, even if
+	// the remaining steps fail. Terraform then marks it as tainted.
+	var state models.RedirectionHostModel
+	state.FromAPI(created)
+	defer func() { resp.Diagnostics.Append(resp.State.Set(ctx, &state)...) }()
 
-	for _, domainName := range *redirectionHost.DomainNames {
-		plan.DomainNames = append(plan.DomainNames, types.StringValue(domainName))
-	}
-
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
+	if !applyEnabled(r.client.RedirectionHosts, created.ID, true, plan.Enabled, "redirection host", &resp.Diagnostics) {
 		return
 	}
+
+	obj, err := r.client.RedirectionHosts.Get(created.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading redirection host after creating it.", err.Error())
+		return
+	}
+	state.FromAPI(obj)
+	warnIfNginxOfflineMeta(obj.Meta, "redirection host", &resp.Diagnostics)
 }
 
 func (r *redirectionHostResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-
 	var state models.RedirectionHostModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
+		return
+	}
+
+	obj, err := r.client.RedirectionHosts.Get(id)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "redirection host", state.ID, err)
 		return
 	}
 
-	redirectionHost, err := r.client.RedirectionHosts.Get(id)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read redirection host with ID %s.", state.ID.ValueString()),
-			err.Error(),
-		)
-		return
-	}
-
-	state.OwnerUserID = types.Int64Value(int64(redirectionHost.OwnerUserID))
-	state.DomainNames = []types.String{}
-	state.ForwardDomainName = types.StringValue(*redirectionHost.ForwardDomainName)
-	state.ForwardScheme = types.StringValue(*redirectionHost.ForwardScheme)
-	state.ForwardHTTPCode = types.Int64Value(int64(*redirectionHost.ForwardHTTPCode))
-	state.CertificateID = types.Int64Value(int64(*redirectionHost.CertificateID))
-	state.SSLForced = types.BoolValue(*redirectionHost.SSLForced)
-	state.AdvancedConfig = types.StringValue(*redirectionHost.AdvancedConfig)
-	state.BlockExploits = types.BoolValue(*redirectionHost.BlockExploits)
-	state.HTTP2Support = types.BoolValue(*redirectionHost.HTTP2Support)
-	state.Enabled = types.BoolValue(*redirectionHost.Enabled)
-	state.HSTSEnabled = types.BoolValue(*redirectionHost.HSTSEnabled)
-	state.HSTSSubdomains = types.BoolValue(*redirectionHost.HSTSSubdomains)
-	state.PreservePath = types.BoolValue(*redirectionHost.PreservePath)
-
-	for _, domainName := range *redirectionHost.DomainNames {
-		state.DomainNames = append(state.DomainNames, types.StringValue(domainName))
-	}
-
-	diags = resp.State.Set(ctx, &state)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	state.FromAPI(obj)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *redirectionHostResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan models.RedirectionHostModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(plan.ID.ValueString())
-	if err != nil {
-		diags.AddError(
-			"Unable to parse ID from plan",
-			fmt.Sprintf("Error received when parsing ID value from plan: %s", err),
-		)
+	id, ok := parseID(plan.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	var _redirectionHost = sdk.RedirectionHostBase{
-		ForwardDomainName: plan.ForwardDomainName.ValueStringPointer(),
-		ForwardHTTPCode:   utils.ReturnPointer(int(plan.ForwardHTTPCode.ValueInt64())),
-		ForwardScheme:     plan.ForwardScheme.ValueStringPointer(),
-		DomainNames:       utils.ReturnPointer([]string{}),
-		CertificateID:     utils.ReturnPointer(int(plan.CertificateID.ValueInt64())),
-		BlockExploits:     plan.BlockExploits.ValueBoolPointer(),
-		AdvancedConfig:    plan.AdvancedConfig.ValueStringPointer(),
-		HTTP2Support:      plan.HTTP2Support.ValueBoolPointer(),
-		HSTSEnabled:       plan.HSTSEnabled.ValueBoolPointer(),
-		HSTSSubdomains:    plan.HSTSSubdomains.ValueBoolPointer(),
-		PreservePath:      plan.PreservePath.ValueBoolPointer(),
-	}
-
-	for _, domainName := range plan.DomainNames {
-		*_redirectionHost.DomainNames = append(*_redirectionHost.DomainNames, domainName.ValueString())
-	}
-
-	redirectionHost, err := r.client.RedirectionHosts.Update(id, _redirectionHost)
+	updated, err := r.client.RedirectionHosts.Update(id, plan.ToAPI())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error updating redirection host.",
@@ -347,53 +235,37 @@ func (r *redirectionHostResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(redirectionHost.ID))
-	plan.OwnerUserID = types.Int64Value(int64(redirectionHost.OwnerUserID))
-	plan.DomainNames = []types.String{}
-	plan.ForwardDomainName = types.StringValue(*redirectionHost.ForwardDomainName)
-	plan.ForwardHTTPCode = types.Int64Value(int64(*redirectionHost.ForwardHTTPCode))
-	plan.ForwardScheme = types.StringValue(*redirectionHost.ForwardScheme)
-	plan.CertificateID = types.Int64Value(int64(*redirectionHost.CertificateID))
-	plan.SSLForced = types.BoolValue(*redirectionHost.SSLForced)
-	plan.AdvancedConfig = types.StringValue(*redirectionHost.AdvancedConfig)
-	plan.BlockExploits = types.BoolValue(*redirectionHost.BlockExploits)
-	plan.HTTP2Support = types.BoolValue(*redirectionHost.HTTP2Support)
-	plan.Enabled = types.BoolValue(*redirectionHost.Enabled)
-	plan.HSTSEnabled = types.BoolValue(*redirectionHost.HSTSEnabled)
-	plan.HSTSSubdomains = types.BoolValue(*redirectionHost.HSTSSubdomains)
-	plan.PreservePath = types.BoolValue(*redirectionHost.PreservePath)
-
-	for _, domainName := range *redirectionHost.DomainNames {
-		plan.DomainNames = append(plan.DomainNames, types.StringValue(domainName))
-	}
-
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
+	enabled := updated.Enabled != nil && *updated.Enabled
+	if !applyEnabled(r.client.RedirectionHosts, id, enabled, plan.Enabled, "redirection host", &resp.Diagnostics) {
 		return
 	}
+
+	obj, err := r.client.RedirectionHosts.Get(id)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading redirection host after updating it.", err.Error())
+		return
+	}
+
+	var state models.RedirectionHostModel
+	state.FromAPI(obj)
+	warnIfNginxOfflineMeta(obj.Meta, "redirection host", &resp.Diagnostics)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *redirectionHostResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-
 	var state models.RedirectionHostModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	err = r.client.RedirectionHosts.Delete(id)
-	if err != nil {
+	err := r.client.RedirectionHosts.Delete(id)
+	if err != nil && !sdk.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting redirection host",
 			fmt.Sprintf("Unable to delete redirection host, unexpected error: %s", err.Error()),
@@ -406,5 +278,5 @@ func (r *redirectionHostResource) Configure(_ context.Context, req resource.Conf
 }
 
 func (r *redirectionHostResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importNumericID(ctx, req, resp)
 }

@@ -108,19 +108,7 @@ func (r *deadHostDataSource) Read(ctx context.Context, req datasource.ReadReques
 		return
 	}
 
-	state.OwnerUserID = types.Int64Value(int64(deadHost.OwnerUserID))
-	state.DomainNames = []types.String{}
-	state.CertificateID = types.Int64Value(int64(*deadHost.CertificateID))
-	state.SSLForced = types.BoolValue(*deadHost.SSLForced)
-	state.AdvancedConfig = types.StringValue(*deadHost.AdvancedConfig)
-	state.HTTP2Support = types.BoolValue(*deadHost.HTTP2Support)
-	state.HSTSEnabled = types.BoolValue(*deadHost.HSTSEnabled)
-	state.HSTSSubdomains = types.BoolValue(*deadHost.HSTSSubdomains)
-	state.Enabled = types.BoolValue(*deadHost.Enabled)
-
-	for _, domainName := range *deadHost.DomainNames {
-		state.DomainNames = append(state.DomainNames, types.StringValue(domainName))
-	}
+	state.FromAPI(deadHost)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)
