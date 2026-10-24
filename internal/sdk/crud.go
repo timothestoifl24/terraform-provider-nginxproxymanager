@@ -5,6 +5,7 @@ package go_npm_proxy_manager
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -37,8 +38,10 @@ type CRD[O Object, OB ObjectBase, OC ObjectCreate] interface {
 
 // Typical crud object.
 type crudObject[O Object, OB ObjectBase, OC ObjectCreate] struct {
-	client          *Client
-	apiPath         string
+	client  *Client
+	apiPath string
+	// Relations to expand when reading, e.g "items,clients".
+	expand          string
 	writeOnlyFields []string
 }
 
@@ -132,25 +135,34 @@ func (o crudObject[O, OB, OC]) List() ([]O, error) {
 	return _list[O](o.client, o.apiPath)
 }
 
-// Get an object by ID.
-func _get[O Object](c *Client, apiPath string, id int) (obj O, err error) {
+// Get an object by ID. Returns an error for which IsNotFound is true if the
+// object doesn't exist.
+func _get[O Object](c *Client, apiPath string, expand string, id int) (obj O, err error) {
 
-	var allObjects []O
-	allObjects, err = _list[O](c, apiPath)
+	endpoint := fmt.Sprintf("%s/%d", apiPath, id)
+	if expand != "" {
+		endpoint = fmt.Sprintf("%s?expand=%s", endpoint, expand)
+	}
+
+	response, err := c.NewRequest(endpoint, http.MethodGet, nil, true, nil)
 	if err != nil {
-		return obj, fmt.Errorf("unable to list %s objects: %s", getName(obj), err)
-	}
-
-	for _, o := range allObjects {
-		if getID(o) == id {
-			return o, nil
+		if IsNotFound(err) {
+			return obj, fmt.Errorf("%s with id %d not found: %w", getName(obj), id, err)
 		}
+		return obj, fmt.Errorf("unable to get %s with id %d: %w", getName(obj), id, err)
 	}
 
-	return obj, fmt.Errorf("%s with id %d not found", getName(obj), id)
+	err = json.Unmarshal(response, &obj)
+	if err != nil {
+		return obj, fmt.Errorf("unable to unmarshal json response: %s", err)
+	}
+
+	setZeroSlices(&obj)
+
+	return obj, nil
 }
 func (o crudObject[O, OB, OC]) Get(id int) (O, error) {
-	return _get[O](o.client, o.apiPath, id)
+	return _get[O](o.client, o.apiPath, o.expand, id)
 }
 
 // Create an object.
@@ -192,12 +204,6 @@ func (o crudObject[O, OB, OC]) Create(obj OC) (O, error) {
 // Update an object.
 func _update[O Object, OB ObjectBase](c *Client, apiPath string, id int, newProperties OB) (updatedObject O, err error) {
 
-	// Make sure the object exists.
-	_, err = _get[O](c, apiPath, id)
-	if err != nil {
-		return updatedObject, fmt.Errorf("unable to find %s with ID %d: %s", getName(updatedObject), id, err)
-	}
-
 	// Marshal the new properties into json.
 	body, err := json.Marshal(newProperties)
 	if err != nil {
@@ -213,7 +219,7 @@ func _update[O Object, OB ObjectBase](c *Client, apiPath string, id int, newProp
 		returnPointer("application/json"),
 	)
 	if err != nil {
-		return updatedObject, fmt.Errorf("unable to update details of %s ID %d: %s", getName(updatedObject), id, err)
+		return updatedObject, fmt.Errorf("unable to update details of %s ID %d: %w", getName(updatedObject), id, err)
 	}
 
 	// Unmarshal the response into an Object.
@@ -221,6 +227,8 @@ func _update[O Object, OB ObjectBase](c *Client, apiPath string, id int, newProp
 	if err != nil {
 		return updatedObject, fmt.Errorf("unable to parse response to update %s ID %d: %s", getName(updatedObject), id, err)
 	}
+
+	setZeroSlices(&updatedObject)
 
 	return updatedObject, nil
 
@@ -233,11 +241,6 @@ func (o crudObject[O, OB, OC]) Update(id int, newProperties OB) (O, error) {
 // Delete an object.
 func _delete[O Object](c *Client, apiPath string, id int) (err error) {
 
-	_, err = _get[O](c, apiPath, id)
-	if err != nil {
-		return err
-	}
-
 	// Delete the object.
 	response, err := c.NewRequest(
 		fmt.Sprintf("%s/%d", apiPath, id),
@@ -249,7 +252,7 @@ func _delete[O Object](c *Client, apiPath string, id int) (err error) {
 
 	// Check for any errors. A successful response will return "true".
 	if err != nil {
-		return fmt.Errorf("unable to delete object with ID %d: %s", id, err)
+		return fmt.Errorf("unable to delete object with ID %d: %w", id, err)
 	} else if string(response) != "true" {
 		return fmt.Errorf("failed to delete object with ID %d: %s", id, string(response))
 	}
@@ -259,6 +262,33 @@ func _delete[O Object](c *Client, apiPath string, id int) (err error) {
 }
 func (o crudObject[O, OB, OC]) Delete(id int) error {
 	return _delete[O](o.client, o.apiPath, id)
+}
+
+// Enable or disable an object. NPM only regenerates the nginx config when
+// this is done through the enable/disable endpoints, not through an update.
+func (o crudObject[O, OB, OC]) SetEnabled(id int, enabled bool) error {
+	action := "disable"
+	if enabled {
+		action = "enable"
+	}
+
+	_, err := o.client.NewRequest(
+		fmt.Sprintf("%s/%d/%s", o.apiPath, id, action),
+		http.MethodPost,
+		nil,
+		true,
+		nil,
+	)
+	// NPM refuses to enable an enabled host or disable a disabled one, which
+	// for us means there's nothing to do.
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest && strings.Contains(apiErr.Message, "already") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("unable to %s %s ID %d: %w", action, getName(*new(O)), id, err)
+	}
+	return nil
 }
 
 func (o crudObject[O, OB, OC]) ClientVersion() *version.Version {

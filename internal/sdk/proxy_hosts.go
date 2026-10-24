@@ -8,8 +8,11 @@ type Location struct {
 	ForwardScheme  string `json:"forward_scheme" proto:"http"`
 	ForwardHost    string `json:"forward_host"`
 	ForwardPort    int    `json:"forward_port" proto:"80"`
+	ForwardPath    string `json:"forward_path"`
 	Path           string `json:"path"`
 	AdvancedConfig string `json:"advanced_config"`
+	// Only supported from NPM 2.16.0, older versions reject it as an unknown field
+	AccessListID *int `json:"access_list_id,omitempty"`
 }
 
 type ProxyHost struct {
@@ -38,4 +41,5 @@ type ProxyHostBase struct {
 	Locations             *[]Location `json:"locations,omitempty" proto:"80"`
 	HSTSEnabled           *bool       `json:"hsts_enabled,omitempty"`
 	HSTSSubdomains        *bool       `json:"hsts_subdomains,omitempty"`
+	TrustForwardedProto   *bool       `json:"trust_forwarded_proto,omitempty"`
 }

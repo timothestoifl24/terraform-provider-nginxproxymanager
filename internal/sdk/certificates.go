@@ -64,7 +64,7 @@ func (o certObject) List() ([]Certificate, error) {
 	return _list[Certificate](o.client, o.apiPath)
 }
 func (o certObject) Get(id int) (Certificate, error) {
-	return _get[Certificate](o.client, o.apiPath, id)
+	return _get[Certificate](o.client, o.apiPath, "", id)
 }
 func (o certObject) Delete(id int) error {
 	return _delete[Certificate](o.client, o.apiPath, id)

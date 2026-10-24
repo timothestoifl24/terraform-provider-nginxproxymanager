@@ -189,11 +189,8 @@ func testCRD[O Object, OB ObjectBase, OC ObjectCreate](t *testing.T, c CRD[O, OB
 		nonID := objectId + 1e4
 
 		_, err = c.Get(nonID)
-		assert.Equal(
-			t,
-			err.Error(),
-			fmt.Sprintf("%s with id %d not found", strings.ToLower(objectName), nonID),
-		)
+		assert.True(t, IsNotFound(err), "expected a not found error, got %v", err)
+		assert.ErrorContains(t, err, fmt.Sprintf("%s with id %d not found", strings.ToLower(objectName), nonID))
 
 		// Tidy up
 		err = c.Delete(objectId)
@@ -217,19 +214,12 @@ func testCRD[O Object, OB ObjectBase, OC ObjectCreate](t *testing.T, c CRD[O, OB
 
 		// Ensure it now can't be found
 		_, err = c.Get(objectId)
-		assert.Equal(
-			t,
-			err.Error(),
-			fmt.Sprintf("%s with id %d not found", strings.ToLower(objectName), objectId),
-		)
+		assert.True(t, IsNotFound(err), "expected a not found error, got %v", err)
+		assert.ErrorContains(t, err, fmt.Sprintf("%s with id %d not found", strings.ToLower(objectName), objectId))
 
 		// Ensure it can't be deleted again
 		err = c.Delete(objectId)
-		assert.Equal(
-			t,
-			err.Error(),
-			fmt.Sprintf("%s with id %d not found", strings.ToLower(objectName), objectId),
-		)
+		assert.True(t, IsNotFound(err), "expected a not found error, got %v", err)
 
 	})
 
