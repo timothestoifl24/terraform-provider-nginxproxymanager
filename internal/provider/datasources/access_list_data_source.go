@@ -14,7 +14,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 var (
@@ -68,7 +67,8 @@ func (d *accessListDataSource) Schema(_ context.Context, _ datasource.SchemaRequ
 						},
 						"password": schema.StringAttribute{
 							Computed:    true,
-							Description: "Basic auth password.",
+							Sensitive:   true,
+							Description: "Always empty, NPM doesn't return the passwords.",
 						},
 					},
 				},
@@ -100,8 +100,6 @@ func (d *accessListDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		return
 	}
 
-	tflog.Info(ctx, fmt.Sprintf("DEBUG: %+v", state))
-
 	id, err := strconv.Atoi(state.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -120,20 +118,10 @@ func (d *accessListDataSource) Read(ctx context.Context, req datasource.ReadRequ
 		return
 	}
 
-	state.Name = types.StringValue(*access_list.Name)
-	state.PassAuth = types.BoolValue(*access_list.PassAuth)
-	state.SatisfyAny = types.BoolValue(*access_list.SatisfyAny)
-	state.OwnerUserID = types.Int64Value(int64(access_list.OwnerUserID))
-
-	// We don't read Items as the password isn't returned from the API
-
-	state.Clients = []models.AccessListClientModel{}
-	for _, client := range *access_list.Clients {
-		_client := models.AccessListClientModel{
-			Address:   types.StringValue(*client.Address),
-			Directive: types.StringValue(*client.Directive),
-		}
-		state.Clients = append(state.Clients, _client)
+	state.FromAPI(access_list)
+	// NPM never returns the passwords
+	for i := range state.Items {
+		state.Items[i].Password = types.StringNull()
 	}
 
 	diags = resp.State.Set(ctx, &state)

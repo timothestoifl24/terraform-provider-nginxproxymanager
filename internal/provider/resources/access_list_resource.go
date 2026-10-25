@@ -6,14 +6,11 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -21,8 +18,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
-	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
 var (
@@ -54,7 +49,7 @@ func (r *accessListResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				},
 			},
 			"name": schema.StringAttribute{
-				Optional:    true,
+				Required:    true,
 				Description: "Name of the access list.",
 			},
 			"satisfy_any": schema.BoolAttribute{
@@ -86,14 +81,11 @@ func (r *accessListResource) Schema(_ context.Context, _ resource.SchemaRequest,
 							Required:    true,
 						},
 						"password": schema.StringAttribute{
-							Description: "Basic auth password.",
+							Description: "Basic auth password. NPM doesn't return passwords, so a password changed outside Terraform isn't detected.",
 							Required:    true,
 							Sensitive:   true,
 						},
 					},
-				},
-				Validators: []validator.List{
-					listvalidator.IsRequired(),
 				},
 			},
 			"client": schema.ListNestedBlock{
@@ -112,9 +104,6 @@ func (r *accessListResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						},
 					},
 				},
-				Validators: []validator.List{
-					listvalidator.IsRequired(),
-				},
 			},
 		},
 	}
@@ -122,38 +111,12 @@ func (r *accessListResource) Schema(_ context.Context, _ resource.SchemaRequest,
 
 func (r *accessListResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan models.AccessListModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	var _accessList = sdk.AccessListBase{
-		Name:       plan.Name.ValueStringPointer(),
-		SatisfyAny: plan.SatisfyAny.ValueBoolPointer(),
-		PassAuth:   plan.PassAuth.ValueBoolPointer(),
-	}
-
-	_accessList.Items = &[]sdk.AccessListItem{}
-	for _, item := range plan.Items {
-		_item := sdk.AccessListItem{
-			Username: item.Username.ValueStringPointer(),
-			Password: item.Password.ValueStringPointer(),
-		}
-		*_accessList.Items = append(*_accessList.Items, _item)
-	}
-
-	_accessList.Clients = &[]sdk.AccessListClient{}
-	for _, client := range plan.Clients {
-		_client := sdk.AccessListClient{
-			Address:   client.Address.ValueStringPointer(),
-			Directive: client.Directive.ValueStringPointer(),
-		}
-		*_accessList.Clients = append(*_accessList.Clients, _client)
-	}
-
-	access_list, err := r.client.AccessLists.Create(_accessList)
+	created, err := r.client.AccessLists.Create(plan.ToAPI())
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating access list.",
@@ -162,175 +125,83 @@ func (r *accessListResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(access_list.ID))
-	plan.Name = types.StringValue(*access_list.Name)
-	plan.SatisfyAny = types.BoolValue(*access_list.SatisfyAny)
-	plan.PassAuth = types.BoolValue(*access_list.PassAuth)
-	plan.OwnerUserID = types.Int64Value(int64(access_list.OwnerUserID))
-
-	// We don't do items as they aren't returned from the API
-
-	plan.Clients = []models.AccessListClientModel{}
-	for _, client := range *access_list.Clients {
-		_client := models.AccessListClientModel{
-			Address:   types.StringValue(*client.Address),
-			Directive: types.StringValue(*client.Directive),
-		}
-		plan.Clients = append(plan.Clients, _client)
+	// The create response doesn't include the items and clients
+	accessList, err := r.client.AccessLists.Get(created.ID)
+	if err != nil {
+		accessList = created
+		resp.Diagnostics.AddWarning("Unable to read the access list after creating it.", err.Error())
 	}
 
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	plan.FromAPI(accessList)
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *accessListResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-
 	var state models.AccessListModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	tflog.Info(ctx, fmt.Sprintf("DEBUG: %+v", state))
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
+		return
+	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
+	accessList, err := r.client.AccessLists.Get(id)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "access list", state.ID, err)
 		return
 	}
 
-	access_list, err := r.client.AccessLists.Get(id)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read access list with ID %s.", state.ID.ValueString()),
-			err.Error(),
-		)
-		return
-	}
-
-	state.Name = types.StringValue(*access_list.Name)
-	state.PassAuth = types.BoolValue(*access_list.PassAuth)
-	state.SatisfyAny = types.BoolValue(*access_list.SatisfyAny)
-	state.OwnerUserID = types.Int64Value(int64(access_list.OwnerUserID))
-
-	// We don't read Items as the password isn't returned from the API
-
-	state.Clients = []models.AccessListClientModel{}
-	for _, client := range *access_list.Clients {
-		_client := models.AccessListClientModel{
-			Address:   types.StringValue(*client.Address),
-			Directive: types.StringValue(*client.Directive),
-		}
-		state.Clients = append(state.Clients, _client)
-	}
-
-	diags = resp.State.Set(ctx, &state)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	state.FromAPI(accessList)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *accessListResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan models.AccessListModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(plan.ID.ValueString())
-	if err != nil {
-		diags.AddError(
-			"Unable to parse ID from plan",
-			fmt.Sprintf("Error received when parsing ID value from plan: %s", err),
-		)
+	id, ok := parseID(plan.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	var _accessList = sdk.AccessListBase{
-		Name:       plan.Name.ValueStringPointer(),
-		SatisfyAny: plan.SatisfyAny.ValueBoolPointer(),
-		PassAuth:   plan.PassAuth.ValueBoolPointer(),
-	}
-
-	_accessList.Items = &[]sdk.AccessListItem{}
-	for _, item := range plan.Items {
-		_item := sdk.AccessListItem{
-			Username: item.Username.ValueStringPointer(),
-			Password: item.Password.ValueStringPointer(),
-		}
-		*_accessList.Items = append(*_accessList.Items, _item)
-	}
-
-	_accessList.Clients = &[]sdk.AccessListClient{}
-	for _, client := range plan.Clients {
-		_client := sdk.AccessListClient{
-			Address:   client.Address.ValueStringPointer(),
-			Directive: client.Directive.ValueStringPointer(),
-		}
-		*_accessList.Clients = append(*_accessList.Clients, _client)
-	}
-
-	access_list, err := r.client.AccessLists.Update(id, _accessList)
-	if err != nil {
+	if _, err := r.client.AccessLists.Update(id, plan.ToAPI()); err != nil {
 		resp.Diagnostics.AddError(
-			"Error creating updating access list.",
+			"Error updating access list.",
 			fmt.Sprintf("Unable to update access list %d, unexpected error: %s", id, err.Error()),
 		)
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(access_list.ID))
-	plan.Name = types.StringValue(*access_list.Name)
-	plan.SatisfyAny = types.BoolValue(*access_list.SatisfyAny)
-	plan.PassAuth = types.BoolValue(*access_list.PassAuth)
-	plan.OwnerUserID = types.Int64Value(int64(access_list.OwnerUserID))
-
-	plan.Clients = []models.AccessListClientModel{}
-	for _, client := range *access_list.Clients {
-		_client := models.AccessListClientModel{
-			Address:   types.StringValue(*client.Address),
-			Directive: types.StringValue(*client.Directive),
-		}
-		plan.Clients = append(plan.Clients, _client)
-	}
-
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
+	accessList, err := r.client.AccessLists.Get(id)
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading access list after updating it.", err.Error())
 		return
 	}
+
+	plan.FromAPI(accessList)
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *accessListResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-
 	var state models.AccessListModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	err = r.client.AccessLists.Delete(id)
-	if err != nil {
+	err := r.client.AccessLists.Delete(id)
+	if err != nil && !sdk.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting access list",
 			fmt.Sprintf("Unable to delete access list, unexpected error: %s", err.Error()),
@@ -343,5 +214,5 @@ func (r *accessListResource) Configure(_ context.Context, req resource.Configure
 }
 
 func (r *accessListResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importNumericID(ctx, req, resp)
 }

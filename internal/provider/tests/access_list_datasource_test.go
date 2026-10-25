@@ -58,7 +58,9 @@ data "nginxproxymanager_access_list" "test" {
 `, name),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "name", name),
-					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "item.#", "0"), // Items aren't returned by the read function
+					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "item.#", "2"),
+					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "item.0.username", "username1"),
+					resource.TestCheckNoResourceAttr("data.nginxproxymanager_access_list.test", "item.0.password"), // Passwords aren't returned by NPM
 					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "client.#", "3"),
 					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "satisfy_any", "true"),
 					resource.TestCheckResourceAttr("data.nginxproxymanager_access_list.test", "pass_auth", "false"),
