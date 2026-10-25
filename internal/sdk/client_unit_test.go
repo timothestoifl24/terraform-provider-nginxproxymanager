@@ -81,19 +81,19 @@ func newFakeNPM(t *testing.T) (*fakeNPM, *httptest.Server) {
 }
 
 func (f *fakeNPM) authorized(r *http.Request) bool {
-	token := f.validToken.Load().(string)
+	token, _ := f.validToken.Load().(string)
 	return token != "" && r.Header.Get("Authorization") == "Bearer "+token
 }
 
-func newFakeClient(t *testing.T, url string, opts ClientOptions) *Client {
-	client, err := NewClientWithOptions(url, AuthStruct{Identity: "admin@example.com", Secret: "changeme"}, opts)
+func newFakeClient(t *testing.T, url string) *Client {
+	client, err := NewClientWithOptions(url, AuthStruct{Identity: "admin@example.com", Secret: "changeme"}, ClientOptions{})
 	assert.NoError(t, err)
 	return client
 }
 
 func TestUnitGetNotFound(t *testing.T) {
 	_, server := newFakeNPM(t)
-	client := newFakeClient(t, server.URL, ClientOptions{})
+	client := newFakeClient(t, server.URL)
 
 	host, err := client.ProxyHosts.Get(1)
 	assert.NoError(t, err)
@@ -107,7 +107,7 @@ func TestUnitGetNotFound(t *testing.T) {
 
 func TestUnitLogsInAgainWhenTokenRejected(t *testing.T) {
 	f, server := newFakeNPM(t)
-	client := newFakeClient(t, server.URL, ClientOptions{})
+	client := newFakeClient(t, server.URL)
 
 	_, err := client.ProxyHosts.Get(1)
 	assert.NoError(t, err)
@@ -124,7 +124,7 @@ func TestUnitLogsInAgainWhenTokenRejected(t *testing.T) {
 func TestUnitRefreshesExpiringToken(t *testing.T) {
 	f, server := newFakeNPM(t)
 	f.expiresIn = time.Minute
-	client := newFakeClient(t, server.URL, ClientOptions{})
+	client := newFakeClient(t, server.URL)
 
 	_, err := client.ProxyHosts.Get(1)
 	assert.NoError(t, err)
@@ -153,7 +153,7 @@ func TestUnitConfiguredToken(t *testing.T) {
 
 func TestUnitNoRetryOnServerError(t *testing.T) {
 	f, server := newFakeNPM(t)
-	client := newFakeClient(t, server.URL, ClientOptions{})
+	client := newFakeClient(t, server.URL)
 
 	_, err := client.ProxyHosts.Create(ProxyHostBase{})
 	assert.Error(t, err)
@@ -162,7 +162,7 @@ func TestUnitNoRetryOnServerError(t *testing.T) {
 
 func TestUnitEnableAlreadyEnabled(t *testing.T) {
 	_, server := newFakeNPM(t)
-	client := newFakeClient(t, server.URL, ClientOptions{})
+	client := newFakeClient(t, server.URL)
 
 	assert.NoError(t, client.ProxyHosts.SetEnabled(1, true))
 }
@@ -178,7 +178,7 @@ func TestUnitTwoFactor(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	client := newFakeClient(t, server.URL, ClientOptions{})
+	client := newFakeClient(t, server.URL)
 	err := client.GetToken()
 	assert.ErrorContains(t, err, "two-factor")
 }

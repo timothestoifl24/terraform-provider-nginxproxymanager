@@ -57,7 +57,7 @@ resource "nginxproxymanager_access_list" "%s" {
 				Config: config(listName),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(name, "item.#", "2"),
-					resource.TestCheckResourceAttr(name, "item.1.username", "bob"),
+					resource.TestCheckTypeSetElemNestedAttrs(name, "item.*", map[string]string{"username": "bob"}),
 					resource.TestCheckResourceAttr(name, "client.#", "1"),
 				),
 			},

@@ -23,17 +23,15 @@ type LetsencryptCertificate struct {
 }
 
 type CertificateMeta struct {
-	Certificate    *string `json:"certificate,omitempty"`
-	CertificateKey *string `json:"certificate_key,omitempty"`
-	// Only returned, it's uploaded with the certificate and key
-	IntermediateCertificate *string                 `json:"intermediate_certificate,omitempty"`
-	DNSChallenge            *bool                   `json:"dns_challenge,omitempty"`
-	DNSProvider             *string                 `json:"dns_provider,omitempty"`
-	DNSProviderCredentials  *string                 `json:"dns_provider_credentials,omitempty"`
-	LetsencryptAgree        *bool                   `json:"letsencrypt_agree,omitempty" proto.constraint:"< 2.13"`
-	LetsencryptCertificate  *LetsencryptCertificate `json:"letsencrypt_certificate,omitempty"`
-	LetsencryptEmail        *string                 `json:"letsencrypt_email,omitempty"  proto.constraint:"< 2.13"`
-	PropagationSeconds      *int                    `json:"propagation_seconds,omitempty"`
+	Certificate            *string                 `json:"certificate,omitempty"`
+	CertificateKey         *string                 `json:"certificate_key,omitempty"`
+	DNSChallenge           *bool                   `json:"dns_challenge,omitempty"`
+	DNSProvider            *string                 `json:"dns_provider,omitempty"`
+	DNSProviderCredentials *string                 `json:"dns_provider_credentials,omitempty"`
+	LetsencryptAgree       *bool                   `json:"letsencrypt_agree,omitempty" proto.constraint:"< 2.13"`
+	LetsencryptCertificate *LetsencryptCertificate `json:"letsencrypt_certificate,omitempty"`
+	LetsencryptEmail       *string                 `json:"letsencrypt_email,omitempty"  proto.constraint:"< 2.13"`
+	PropagationSeconds     *int                    `json:"propagation_seconds,omitempty"`
 }
 
 type CertificateBase struct {

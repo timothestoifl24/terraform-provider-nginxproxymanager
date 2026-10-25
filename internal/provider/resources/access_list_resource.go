@@ -73,7 +73,8 @@ func (r *accessListResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 		},
 		Blocks: map[string]schema.Block{
-			"item": schema.ListNestedBlock{
+			// NPM inserts the users in parallel, so it doesn't keep their order
+			"item": schema.SetNestedBlock{
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"username": schema.StringAttribute{

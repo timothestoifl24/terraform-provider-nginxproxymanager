@@ -67,7 +67,4 @@ func (m *CustomCertificateModel) FromAPI(cert sdk.Certificate) {
 	if cert.Meta.CertificateKey != nil {
 		m.CertificateKey = types.StringValue(*cert.Meta.CertificateKey)
 	}
-	if cert.Meta.IntermediateCertificate != nil {
-		m.IntermediateCertificate = types.StringValue(*cert.Meta.IntermediateCertificate)
-	}
 }

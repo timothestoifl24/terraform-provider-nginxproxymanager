@@ -58,7 +58,7 @@ func (d *accessListDataSource) Schema(_ context.Context, _ datasource.SchemaRequ
 			},
 		},
 		Blocks: map[string]schema.Block{
-			"item": schema.ListNestedBlock{
+			"item": schema.SetNestedBlock{
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"username": schema.StringAttribute{
