@@ -13,7 +13,7 @@ description: |-
 ## Example Usage
 
 ```terraform
-resource "nginxproxymanager_redirection_host" "test" {
+resource "nginxproxymanager_redirection_host" "example" {
   forward_domain_name = "test123.com"
   forward_http_code   = 301
   forward_scheme      = "https"
@@ -29,10 +29,10 @@ resource "nginxproxymanager_redirection_host" "test" {
 
 ### Required
 
-- `domain_names` (List of String) Domain names to accept.
+- `domain_names` (Set of String) Domain names to accept. NPM stores these sorted, so the order doesn't matter.
 - `forward_domain_name` (String) Domain name to redirect the request to.
-- `forward_http_code` (Number) HTTP code to redirect with.
-- `forward_scheme` (String) Scheme to use when forwarding.
+- `forward_http_code` (Number) HTTP code to redirect with, between 300 and 308.
+- `forward_scheme` (String) Scheme to redirect with, `http`, `https` or `auto` to keep the scheme of the request.
 
 ### Optional
 
@@ -58,5 +58,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import nginxproxymanager_redirection_host 1
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_redirection_host.example 1
 ```

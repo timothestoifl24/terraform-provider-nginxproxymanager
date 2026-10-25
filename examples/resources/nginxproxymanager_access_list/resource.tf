@@ -1,4 +1,4 @@
-resource "nginxproxymanager_access_list" "test" {
+resource "nginxproxymanager_access_list" "example" {
   name = "test12345"
 
   item {

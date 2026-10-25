@@ -15,6 +15,7 @@
   - [Documentation](#documentation)
   - [Installation](#installation)
   - [Supported Versions](#supported-versions)
+  - [Importing an existing NPM](#importing-an-existing-npm)
   - [Contributing](#contributing)
   - [Test Setup](#test-setup)
     - [Quirks](#quirks)
@@ -46,6 +47,42 @@ The provider is tested against the following versions in CI:
 Due to API changes, the minimum required version for Nginx Proxy Manager is 2.15.0.
 
 The provider is tested against Terraform versions 1.15.0 and above
+
+## Importing an existing NPM
+
+Every resource can be imported by the ID NPM shows in the UI and API, except `nginxproxymanager_user_permissions`
+(the user's ID), `nginxproxymanager_default_site` (always `default-site`) and `nginxproxymanager_user_password`
+(NPM never returns passwords, so it can't be imported).
+
+With Terraform 1.5 or later you can generate the config for everything at once. Write `import` blocks for the
+objects you want, for example with this script against the NPM API:
+
+```bash
+NPM=http://npm.example.com:81
+TOKEN=$(curl -s -X POST "$NPM/api/tokens" -H 'Content-Type: application/json' \
+  -d '{"identity":"admin@example.com","secret":"changeme"}' | jq -r .token)
+
+for kind in proxy-hosts:proxy_host redirection-hosts:redirection_host dead-hosts:dead_host \
+            streams:stream access-lists:access_list; do
+  path=${kind%%:*}; type=${kind##*:}
+  curl -s -H "Authorization: Bearer $TOKEN" "$NPM/api/nginx/$path" |
+    jq -r --arg type "$type" '.[] | "import {\n  to = nginxproxymanager_\($type).\($type)_\(.id)\n  id = \"\(.id)\"\n}\n"'
+done > imports.tf
+```
+
+Then let Terraform write the resources and check them:
+
+```bash
+terraform plan -generate-config-out=generated.tf
+terraform apply
+terraform plan   # should show no changes
+```
+
+NPM doesn't return secrets, so after an import:
+
+- access list user passwords and Letsencrypt `dns_provider_credentials` have to be added to the config.
+  The next apply sets them in place, without replacing anything.
+- custom certificates need their certificate and key in the config.
 
 ## Contributing
 
@@ -79,6 +116,29 @@ Tests are set up using the following components, mirroring the setup in the main
 - `PowerDNS` / `MariaDB` - DNS provider used for ACME DNS challenges
 - `Step-CA` - ACME Certificate provider
 - `DNSRouter` - Intercept DNS requests for the domain `example.com` and forward to PowerDNS.
+
+### Running the tests with Podman
+
+The test stack also runs under rootless Podman, with two differences: nginx in the NPM container needs to
+be allowed to bind to port 80, and `make docker-up` uses GNU `timeout` and `grep -P`, which macOS doesn't have.
+Add an override file:
+
+```yaml
+# docker/docker-compose.override.yaml
+services:
+  npm:
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+```
+
+and start the stack directly:
+
+```bash
+export NPM_UID=1000 NPM_GID=$(id -g) PWD=$(pwd)
+podman compose -f docker/docker-compose.yaml -f docker/docker-compose.override.yaml up -d
+podman exec npm bash -c 'chmod g+r /data/keys.json'
+TF_ACC=1 go test -count=1 ./internal/sdk ./internal/provider/tests
+```
 
 ### Quirks
 

@@ -26,7 +26,7 @@ resource "nginxproxymanager_user" "user" {
 
 ### Required
 
-- `email` (String) Email of the user, used for logging in.
+- `email` (String) Email of the user, used for logging in. Must be lowercase, as NPM lowercases it on update.
 - `name` (String) Username of the user.
 - `nickname` (String) Nickname for the user.
 
@@ -47,5 +47,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import nginxproxymanager_user 10
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_user.example 1
 ```

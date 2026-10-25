@@ -13,7 +13,7 @@ description: |-
 ## Example Usage
 
 ```terraform
-resource "nginxproxymanager_proxy_host" "test" {
+resource "nginxproxymanager_proxy_host" "example" {
   domain_names = ["domain123.com"]
 
   http2_support  = true
@@ -26,7 +26,7 @@ resource "nginxproxymanager_proxy_host" "test" {
 
 ### Required
 
-- `domain_names` (List of String) Domain names to accept.
+- `domain_names` (Set of String) Domain names to accept. NPM stores these sorted, so the order doesn't matter.
 
 ### Optional
 
@@ -50,5 +50,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import nginxproxymanager_dead_host 1
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_dead_host.example 1
 ```

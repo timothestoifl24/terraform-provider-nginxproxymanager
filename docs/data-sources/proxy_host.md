@@ -42,15 +42,21 @@ data "nginxproxymanager_proxy_host" "test" {
 - `hsts_subdomains` (Boolean) Whether HSTS is enabled for subdomains.
 - `http2_support` (Boolean) Whether HTTP2 support is enabled.
 - `location` (Block List) (see [below for nested schema](#nestedblock--location))
+- `nginx_err` (String) The error nginx reported for this host's config, if any.
+- `nginx_online` (Boolean) Whether nginx accepted the config generated for this host on the last change.
 - `owner_user_id` (Number) ID of the user who owns the proxy host.
 - `ssl_forced` (Boolean) Whether SSL is forced.
+- `trust_forwarded_proto` (Boolean) Whether the X-Forwarded-Proto header from an upstream proxy is trusted.
 
 <a id="nestedblock--location"></a>
 ### Nested Schema for `location`
 
 Read-Only:
 
+- `access_list_id` (Number) ID of the access list for this location.
+- `advanced_config` (String) Advanced NGINX config for this location.
 - `forward_host` (String) Host to forward the request on to.
+- `forward_path` (String) Path on the forward host the request is sent to.
 - `forward_port` (Number) Port to forward to.
 - `forward_scheme` (String) Scheme to use when forwarding.
-- `path` (String) Path on the forward host.
+- `path` (String) Path matched by the location.

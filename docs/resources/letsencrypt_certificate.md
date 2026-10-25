@@ -13,16 +13,15 @@ This resource does **not** support renewals, therefore the recommended way of re
 ## Example Usage 
 
 ```terraform
-resource "nginxproxymanager_letsencrypt_certificate" "test" {
-  domain_names             = ["www.example.com"]
+resource "nginxproxymanager_letsencrypt_certificate" "example" {
+  domain_names             = ["www.example.com", "example.com"]
   dns_challenge            = true
   dns_provider             = "route53"
-  dns_provider_credentials = <<EOF
-    [default]
-    aws_access_key_id=exmapleaccesskey
-    aws_secret_access_key=examplesecretkey
-  EOF
-  letsencrypt_email        = "test@test.com"
+  dns_provider_credentials = <<EOT
+[default]
+aws_access_key_id=exampleaccesskey
+aws_secret_access_key=examplesecretkey
+EOT
   propagation_seconds      = 5
 }
 ```
@@ -33,13 +32,13 @@ resource "nginxproxymanager_letsencrypt_certificate" "test" {
 ### Required
 
 - `dns_challenge` (Boolean) Whether or not to use a DNS challenge for this Letsencrypt certificate.
-- `domain_names` (List of String) Domain names for the certificate.
-- `letsencrypt_email` (String) Email address to use for the Letsencrypt certificate.
+- `domain_names` (Set of String) Domain names for the certificate.
 
 ### Optional
 
-- `dns_provider` (String) Which DNS provider to use for the DNS challenge. Must be set if `dns_challenge` it `true`.
-- `dns_provider_credentials` (String, Sensitive) Credentials for the provided DNS provider. Consult the Nginx Proxy Manager UI for the format for your provider.
+- `dns_provider` (String) Which DNS provider to use for the DNS challenge, as listed by the `nginxproxymanager_dns_providers` data source. Must be set if `dns_challenge` is `true`.
+- `dns_provider_credentials` (String, Sensitive) Credentials for the provided DNS provider. Consult the Nginx Proxy Manager UI for the format for your provider. NPM doesn't return these, so they aren't checked for changes made outside Terraform.
+- `letsencrypt_email` (String, Deprecated) Not used. Since NPM 2.13 the email address of the user that owns the certificate is used.
 - `propagation_seconds` (Number) Number of seconds to wait for the DNS challenge to propagate. Defaults to the provider default if left empty.
 
 ### Read-Only
@@ -48,5 +47,6 @@ resource "nginxproxymanager_letsencrypt_certificate" "test" {
 - `nice_name` (String) Nice name for the certificate.
 
 ```terraform
-terraform import nginxproxymanager_letsencrypt_certificate 1
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_letsencrypt_certificate.example 1
 ```

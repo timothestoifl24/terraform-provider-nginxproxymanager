@@ -1,1 +1,2 @@
-terraform import nginxproxymanager_user 10
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_user.example 1

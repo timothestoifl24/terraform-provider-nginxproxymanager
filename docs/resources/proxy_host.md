@@ -13,14 +13,26 @@ description: |-
 ## Example Usage
 
 ```terraform
-resource "nginxproxymanager_proxy_host" "test" {
+resource "nginxproxymanager_proxy_host" "example" {
   forward_host   = "server.local"
   forward_port   = 8080
   forward_scheme = "https"
-  domain_names   = ["domain123.com"]
+  domain_names   = ["example.com", "www.example.com"]
 
+  certificate_id = nginxproxymanager_letsencrypt_certificate.example.id
+  ssl_forced     = true
   http2_support  = true
-  certificate_id = 42
+  block_exploits = true
+  access_list_id = nginxproxymanager_access_list.example.id
+
+  location {
+    path            = "/api"
+    forward_scheme  = "http"
+    forward_host    = "api.local"
+    forward_port    = 9000
+    forward_path    = "/v1"
+    advanced_config = "proxy_read_timeout 300s;"
+  }
 }
 ```
 
@@ -29,10 +41,10 @@ resource "nginxproxymanager_proxy_host" "test" {
 
 ### Required
 
-- `domain_names` (List of String) Domain names to accept.
+- `domain_names` (Set of String) Domain names to accept. NPM stores these sorted, so the order doesn't matter.
 - `forward_host` (String) Host to forward the request on to.
 - `forward_port` (Number) Port to forward to.
-- `forward_scheme` (String) Scheme to use when forwarding.
+- `forward_scheme` (String) Scheme to use when forwarding, `http` or `https`.
 
 ### Optional
 
@@ -46,12 +58,15 @@ resource "nginxproxymanager_proxy_host" "test" {
 - `hsts_enabled` (Boolean) Enable HSTS.
 - `hsts_subdomains` (Boolean) Enable HSTS for subdomains.
 - `http2_support` (Boolean) Whether to enable HTTP2 support.
-- `location` (Block List) (see [below for nested schema](#nestedblock--location))
+- `location` (Block List) Custom locations, each forwarding a path to a different host. (see [below for nested schema](#nestedblock--location))
 - `ssl_forced` (Boolean) Whether to force SSL.
+- `trust_forwarded_proto` (Boolean) Trust the X-Forwarded-Proto header from an upstream proxy when forcing SSL.
 
 ### Read-Only
 
 - `id` (String) ID of the proxy host.
+- `nginx_err` (String) The error nginx reported for this host's config, if any.
+- `nginx_online` (Boolean) Whether nginx accepted the config generated for this host on the last change.
 - `owner_user_id` (Number) ID of the user which owns the proxy host.
 
 <a id="nestedblock--location"></a>
@@ -61,11 +76,14 @@ Required:
 
 - `forward_host` (String) Host to forward the request on to.
 - `forward_port` (Number) Port to forward to.
-- `forward_scheme` (String) Scheme to use when forwarding.
+- `forward_scheme` (String) Scheme to use when forwarding, `http` or `https`.
+- `path` (String) Path to match, e.g `/api`.
 
 Optional:
 
-- `path` (String) Path on the forward host.
+- `access_list_id` (Number) ID of an access list for this location. Requires NPM 2.16.0 or later.
+- `advanced_config` (String) Advanced NGINX config for this location.
+- `forward_path` (String) Path on the forward host to send the request to.
 
 ## Import
 
@@ -74,5 +92,6 @@ Import is supported using the following syntax:
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-terraform import nginxproxymanager_proxy_host 1
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_proxy_host.example 1
 ```

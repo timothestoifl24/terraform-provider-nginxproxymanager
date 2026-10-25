@@ -1,1 +1,2 @@
-terraform import nginxproxymanager_custom_certificate 123
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_custom_certificate.example 1

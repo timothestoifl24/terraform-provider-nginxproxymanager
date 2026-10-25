@@ -46,11 +46,11 @@ resource "nginxproxymanager_custom_certificate" "example" {
 ### Required
 
 - `certificate` (String) Body of the certificate in PEM format.
-- `certificate_key` (String) Private key of the certificate in PEM format.
+- `certificate_key` (String, Sensitive) Private key of the certificate in PEM format.
 
 ### Optional
 
-- `intermediate_certificate` (String) Intermediate certificate in the chain.
+- `intermediate_certificate` (String) Intermediate certificate in the chain. NPM doesn't return it, so changes made outside Terraform aren't detected.
 - `nice_name` (String) Nice name for the certificate.
 
 ### Read-Only
@@ -58,5 +58,6 @@ resource "nginxproxymanager_custom_certificate" "example" {
 - `id` (String) ID of the certificate.
 
 ```terraform
-terraform import nginxproxymanager_custom_certificate 123
+# Import by the ID shown in the NPM UI or API
+terraform import nginxproxymanager_custom_certificate.example 1
 ```
