@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
@@ -13,16 +14,20 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/objectvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
-	_ resource.Resource              = &userPermissionsResource{}
-	_ resource.ResourceWithConfigure = &userPermissionsResource{}
+	_ resource.Resource                = &userPermissionsResource{}
+	_ resource.ResourceWithConfigure   = &userPermissionsResource{}
+	_ resource.ResourceWithImportState = &userPermissionsResource{}
 )
 
 type userPermissionsResource struct {
@@ -43,6 +48,9 @@ func (r *userPermissionsResource) Schema(_ context.Context, _ resource.SchemaReq
 			"user_id": schema.Int64Attribute{
 				Required:    true,
 				Description: "ID of the user (required).",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.RequiresReplace(),
+				},
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -168,18 +176,16 @@ func (r *userPermissionsResource) Create(ctx context.Context, req resource.Creat
 func (r *userPermissionsResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 
 	var state models.UserPermissionsModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	// Only the user ID is read from state, as the permissions are empty
+	// right after an import
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("user_id"), &state.UserID)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	user, err := r.client.Users.Get(int(state.UserID.ValueInt64()))
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read user with ID %d.", state.UserID.ValueInt64()),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "user", types.StringValue(strconv.FormatInt(state.UserID.ValueInt64(), 10)), err)
 		return
 	}
 
@@ -196,11 +202,7 @@ func (r *userPermissionsResource) Read(ctx context.Context, req resource.ReadReq
 		},
 	}
 
-	diags = resp.State.Set(ctx, &state)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
 func (r *userPermissionsResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -257,6 +259,10 @@ func (r *userPermissionsResource) Delete(ctx context.Context, req resource.Delet
 	}
 
 	user, err := r.client.Users.Get(int(state.UserID.ValueInt64()))
+	if sdk.IsNotFound(err) {
+		// The permissions went with the user
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error finding user.",
@@ -287,4 +293,17 @@ func (r *userPermissionsResource) Delete(ctx context.Context, req resource.Delet
 
 func (r *userPermissionsResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client = configureProvider(req, resp)
+}
+
+// Import the permissions of a user by the user's ID.
+func (r *userPermissionsResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	userID, err := strconv.ParseInt(req.ID, 10, 64)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Invalid import ID",
+			fmt.Sprintf("Expected the numeric ID of the user, got %q.", req.ID),
+		)
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("user_id"), userID)...)
 }

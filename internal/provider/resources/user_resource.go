@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
@@ -15,7 +16,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
@@ -56,7 +56,10 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"email": schema.StringAttribute{
 				Required:    true,
-				Description: "Email of the user, used for logging in.",
+				Description: "Email of the user, used for logging in. Must be lowercase, as NPM lowercases it on update.",
+				Validators: []validator.String{
+					stringvalidator.RegexMatches(regexp.MustCompile(`^[^A-Z]*$`), "must be lowercase, as NPM lowercases email addresses when updating a user"),
+				},
 			},
 			"name": schema.StringAttribute{
 				Required:    true,
@@ -167,10 +170,7 @@ func (r *userResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 
 	user, err := r.client.Users.Get(id)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read user with ID %s.", state.ID.ValueString()),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "user", state.ID, err)
 		return
 	}
 
@@ -269,7 +269,7 @@ func (r *userResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	}
 
 	err = r.client.Users.Delete(id)
-	if err != nil {
+	if err != nil && !sdk.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting user",
 			fmt.Sprintf("Unable to delete user, unexpected error: %s", err.Error()),
@@ -282,5 +282,5 @@ func (r *userResource) Configure(_ context.Context, req resource.ConfigureReques
 }
 
 func (r *userResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importNumericID(ctx, req, resp)
 }

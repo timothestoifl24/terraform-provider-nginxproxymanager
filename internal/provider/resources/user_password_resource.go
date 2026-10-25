@@ -6,12 +6,16 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
@@ -37,6 +41,9 @@ func (r *userPasswordResource) Schema(_ context.Context, _ resource.SchemaReques
 			"user_id": schema.Int64Attribute{
 				Required:    true,
 				Description: "ID of the user (required).",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.RequiresReplace(),
+				},
 			},
 			"password": schema.StringAttribute{
 				Required:    true,
@@ -84,8 +91,19 @@ func (r *userPasswordResource) Create(ctx context.Context, req resource.CreateRe
 	}
 }
 
-// Password isn't returned from the API, so we don't read this resource.
+// The password isn't returned from the API, so this only checks the user
+// still exists. The password can't be imported for the same reason.
 func (r *userPasswordResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state models.UserPasswordModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	_, err := r.client.Users.Get(int(state.UserID.ValueInt64()))
+	if err != nil {
+		handleReadError(ctx, resp, "user", types.StringValue(strconv.FormatInt(state.UserID.ValueInt64(), 10)), err)
+	}
 }
 
 func (r *userPasswordResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -130,7 +148,4 @@ func (r *userPasswordResource) Delete(ctx context.Context, req resource.DeleteRe
 
 func (r *userPasswordResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client = configureProvider(req, resp)
-}
-
-func (r *userPasswordResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 }
