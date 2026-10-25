@@ -12,12 +12,10 @@ import (
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
 	utils "github.com/edklesel/terraform-provider-nginxproxymanager/internal/utils"
 
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
@@ -50,9 +48,11 @@ func (r *customCertificateResource) Schema(_ context.Context, _ resource.SchemaR
 			},
 			"nice_name": schema.StringAttribute{
 				Optional:    true,
+				Computed:    true,
 				Description: "Nice name for the certificate.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplaceIfConfigured(),
 				},
 			},
 			"certificate": schema.StringAttribute{
@@ -64,6 +64,7 @@ func (r *customCertificateResource) Schema(_ context.Context, _ resource.SchemaR
 			},
 			"certificate_key": schema.StringAttribute{
 				Required:    true,
+				Sensitive:   true,
 				Description: "Private key of the certificate in PEM format.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -71,9 +72,9 @@ func (r *customCertificateResource) Schema(_ context.Context, _ resource.SchemaR
 			},
 			"intermediate_certificate": schema.StringAttribute{
 				Optional:    true,
-				Description: "Intermediate certificate in the chain.",
+				Description: "Intermediate certificate in the chain. NPM doesn't return it, so changes made outside Terraform aren't detected.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+					requiresReplaceIfKnown,
 				},
 			},
 		},
@@ -90,8 +91,10 @@ func (r *customCertificateResource) Create(ctx context.Context, req resource.Cre
 	}
 
 	var _certificate = sdk.CertificateBase{
-		NiceName: plan.NiceName.ValueStringPointer(),
 		Provider: utils.ReturnPointer("other"),
+	}
+	if !plan.NiceName.IsUnknown() {
+		_certificate.NiceName = plan.NiceName.ValueStringPointer()
 	}
 
 	certUpload := sdk.CertificateUpload{
@@ -140,12 +143,12 @@ func (r *customCertificateResource) Create(ctx context.Context, req resource.Cre
 		return
 	}
 
-	certGet, _ := r.client.Certificates.Get(certificate.ID)
-
-	plan.ID = types.StringValue(strconv.Itoa(certificate.ID))
-	plan.NiceName = types.StringValue(*certGet.NiceName)
-	plan.Certificate = types.StringValue(*certGet.Meta.Certificate)
-	plan.CertificateKey = types.StringValue(*certGet.Meta.CertificateKey)
+	certGet, err := r.client.Certificates.Get(certificate.ID)
+	if err != nil {
+		certGet = certificate
+		resp.Diagnostics.AddWarning("Unable to read the certificate after creating it.", err.Error())
+	}
+	plan.FromAPI(certGet)
 
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -174,16 +177,11 @@ func (r *customCertificateResource) Read(ctx context.Context, req resource.ReadR
 
 	certificate, err := r.client.Certificates.Get(id)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read certificate with ID %s.", state.ID.ValueString()),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "certificate", state.ID, err)
 		return
 	}
 
-	state.NiceName = types.StringValue(*certificate.NiceName)
-	state.Certificate = types.StringValue(*certificate.Meta.Certificate)
-	state.CertificateKey = types.StringValue(*certificate.Meta.CertificateKey)
+	state.FromAPI(certificate)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)
@@ -192,9 +190,16 @@ func (r *customCertificateResource) Read(ctx context.Context, req resource.ReadR
 	}
 }
 
-// The update function doesn't do anything as all attributes require replacement
-// but is implements to fit the interface requirements.
+// Certificates can't be changed in NPM, so everything that matters requires
+// replacement. What's left to update are the values NPM doesn't return,
+// which are only kept in state.
 func (r *customCertificateResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan models.CustomCertificateModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *customCertificateResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -216,7 +221,7 @@ func (r *customCertificateResource) Delete(ctx context.Context, req resource.Del
 	}
 
 	err = r.client.Certificates.Delete(id)
-	if err != nil {
+	if err != nil && !sdk.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting certificate",
 			fmt.Sprintf("Unable to delete certificate, unexpected error: %s", err.Error()),
@@ -229,5 +234,5 @@ func (r *customCertificateResource) Configure(_ context.Context, req resource.Co
 }
 
 func (r *customCertificateResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importNumericID(ctx, req, resp)
 }

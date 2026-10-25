@@ -10,7 +10,6 @@ import (
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
-	utils "github.com/edklesel/terraform-provider-nginxproxymanager/internal/utils"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -102,31 +101,7 @@ func (r *letsencryptCertificateDataSource) Read(ctx context.Context, req datasou
 		return
 	}
 
-	state.NiceName = types.StringValue(*certificate.NiceName)
-	state.DNSChallenge = types.BoolValue(*certificate.Meta.DNSChallenge)
-	state.DNSProvider = types.StringValue(*certificate.Meta.DNSProvider)
-	state.PropagationSeconds = types.Int64Value(int64(*certificate.Meta.PropagationSeconds))
-
-	// The DNS provider credentials are only returned from the API in <2.13.0
-	if utils.CheckAttribute(r.client, &utils.ReturnDNSProviderCredentials) {
-		state.DNSProviderCredentials = types.StringValue(*certificate.Meta.DNSProviderCredentials)
-	}
-
-	// The LetsencryptEmail and LetsencryptAgree are only present i
-	if utils.CheckAttribute(r.client, &utils.FieldLetsencryptEmail) {
-		state.LetsencryptEmail = types.StringValue(*certificate.Meta.LetsencryptEmail)
-	}
-
-	// These aren't yet implemented in the GET request to the certificate
-	// plan.CN = types.StringValue(*certificate.Meta.LetsencryptCertificate.CN)
-	// plan.Issuer = types.StringValue(*certificate.Meta.LetsencryptCertificate.Issuer)
-	// plan.From = types.Int64Value(int64(*certificate.Meta.LetsencryptCertificate.Dates.From))
-	// plan.To = types.Int64Value(int64(*certificate.Meta.LetsencryptCertificate.Dates.To))
-
-	state.DomainNames = []types.String{}
-	for _, dn := range *certificate.DomainNames {
-		state.DomainNames = append(state.DomainNames, types.StringValue(dn))
-	}
+	state.FromAPI(certificate)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)

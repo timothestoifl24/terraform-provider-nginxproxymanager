@@ -6,21 +6,21 @@ package provider
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"slices"
+	"strings"
 
 	models "github.com/edklesel/terraform-provider-nginxproxymanager/internal/models"
 	sdk "github.com/edklesel/terraform-provider-nginxproxymanager/internal/sdk"
 	utils "github.com/edklesel/terraform-provider-nginxproxymanager/internal/utils"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
-	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -30,21 +30,7 @@ var (
 	_ resource.Resource                = &letsencryptCertificateResource{}
 	_ resource.ResourceWithConfigure   = &letsencryptCertificateResource{}
 	_ resource.ResourceWithImportState = &letsencryptCertificateResource{}
-
-	dnsProviders = []string{
-		"acmedns", "active24", "aliyun", "azure", "baidu", "beger", "bunny",
-		"cdmon", "cloudflare", "cloudns", "cloudxns", "constellix", "corenetworks",
-		"cpanel", "ddnss", "dsec", "duckdns", "digitalocean", "directadmin",
-		"dnsimple", "dnsmadeeasy", "dnsmulti", "dnspod", "domainoffensive",
-		"domeneshop", "dynu", "easydns", "eurodns", "firstdomains", "freedns",
-		"gandi", "gcore", "godaddy", "google", "googledomains", "he", "hetner",
-		"hostingnl", "hover", "infomaniak", "inwx", "ionos", "ispconfig", "isset",
-		"joker", "leaseweb", "linode", "loopia", "luadns", "mijnhost", "namecheap",
-		"netcup", "nictu", "njalla", "nsone", "oci", "ovn", "plesk", "porkbun",
-		"powerdns", "regru", "rfc2136", "rockenstein", "route53", "spaceship",
-		"strato", "selecte1v2", "timeweb", "transip", "tencentcloud", "vultr",
-		"websupport", "wedos", "edgedns", "zoneedit",
-	}
+	_ resource.ResourceWithModifyPlan  = &letsencryptCertificateResource{}
 )
 
 type letsencryptCertificateResource struct {
@@ -59,6 +45,17 @@ func (r *letsencryptCertificateResource) Metadata(_ context.Context, req resourc
 	resp.TypeName = req.ProviderTypeName + "_letsencrypt_certificate"
 }
 
+// NPM doesn't return the DNS provider credentials, so they're unknown after
+// an import. Setting them in the config then must not replace the
+// certificate, only a change to credentials that were already known.
+var requiresReplaceIfKnown = stringplanmodifier.RequiresReplaceIf(
+	func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+		resp.RequiresReplace = !req.StateValue.IsNull()
+	},
+	"Changing the value replaces the certificate, unless it wasn't known yet, e.g after an import.",
+	"Changing the value replaces the certificate, unless it wasn't known yet, e.g after an import.",
+)
+
 func (r *letsencryptCertificateResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
@@ -69,15 +66,15 @@ func (r *letsencryptCertificateResource) Schema(_ context.Context, _ resource.Sc
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"domain_names": schema.ListAttribute{
+			"domain_names": schema.SetAttribute{
 				Required:    true,
 				Description: "Domain names for the certificate.",
 				ElementType: types.StringType,
-				Validators: []validator.List{
-					listvalidator.SizeAtLeast(1),
+				Validators: []validator.Set{
+					setvalidator.SizeAtLeast(1),
 				},
-				PlanModifiers: []planmodifier.List{
-					listplanmodifier.RequiresReplace(),
+				PlanModifiers: []planmodifier.Set{
+					setplanmodifier.RequiresReplace(),
 				},
 			},
 			"dns_challenge": schema.BoolAttribute{
@@ -93,11 +90,9 @@ func (r *letsencryptCertificateResource) Schema(_ context.Context, _ resource.Sc
 				},
 			},
 			"dns_provider": schema.StringAttribute{
-				Optional:    true,
-				Description: "Which DNS provider to use for the DNS challenge. Must be set if `dns_challenge` it `true`.",
-				Validators: []validator.String{
-					stringvalidator.OneOf(dnsProviders...),
-				},
+				Optional: true,
+				Description: "Which DNS provider to use for the DNS challenge, as listed by the `nginxproxymanager_dns_providers` " +
+					"data source. Must be set if `dns_challenge` is `true`.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -105,23 +100,23 @@ func (r *letsencryptCertificateResource) Schema(_ context.Context, _ resource.Sc
 			"dns_provider_credentials": schema.StringAttribute{
 				Optional:    true,
 				Sensitive:   true,
-				Description: "Credentials for the provided DNS provider. Consult the Nginx Proxy Manager UI for the format for your provider.",
+				Description: "Credentials for the provided DNS provider. Consult the Nginx Proxy Manager UI for the format for your provider. NPM doesn't return these, so they aren't checked for changes made outside Terraform.",
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
+					requiresReplaceIfKnown,
 				},
 			},
 			"letsencrypt_email": schema.StringAttribute{
-				Required:    true,
-				Description: "Email address to use for the Letsencrypt certificate.",
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
+				Optional:           true,
+				Description:        "Not used. Since NPM 2.13 the email address of the user that owns the certificate is used.",
+				DeprecationMessage: "NPM ignores this since version 2.13 and uses the email address of the user that owns the certificate. Remove it from your configuration.",
 			},
 			"propagation_seconds": schema.Int64Attribute{
 				Optional:    true,
+				Computed:    true,
 				Description: "Number of seconds to wait for the DNS challenge to propagate. Defaults to the provider default if left empty.",
 				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplace(),
+					int64planmodifier.UseStateForUnknown(),
+					int64planmodifier.RequiresReplaceIfConfigured(),
 				},
 			},
 			"nice_name": schema.StringAttribute{
@@ -131,78 +126,74 @@ func (r *letsencryptCertificateResource) Schema(_ context.Context, _ resource.Sc
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			// These aren't consistently returned by the API, so leaving them out of the
-			// resource for the time being
-
-			// "from": schema.Int64Attribute{
-			// 	Computed:    true,
-			// 	Description: "The date the certificate is valid from.",
-			// 	PlanModifiers: []planmodifier.Int64{
-			// 		int64planmodifier.UseStateForUnknown(),
-			// 	},
-			// },
-			// "to": schema.Int64Attribute{
-			// 	Computed:    true,
-			// 	Description: "The date the certificate is valid until.",
-			// 	PlanModifiers: []planmodifier.Int64{
-			// 		int64planmodifier.UseStateForUnknown(),
-			// 	},
-			// },
-			// "cn": schema.StringAttribute{
-			// 	Computed:    true,
-			// 	Description: "The Common Name of the certificate",
-			// 	PlanModifiers: []planmodifier.String{
-			// 		stringplanmodifier.UseStateForUnknown(),
-			// 	},
-			// },
-			// "issuer": schema.StringAttribute{
-			// 	Computed:    true,
-			// 	Description: "Issuer of the certificate",
-			// 	PlanModifiers: []planmodifier.String{
-			// 		stringplanmodifier.UseStateForUnknown(),
-			// 	},
-			// },
 		},
+	}
+}
+
+// ModifyPlan checks the DNS provider against the ones the running NPM
+// supports, as that list changes between NPM versions.
+func (r *letsencryptCertificateResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if r.client == nil || req.Plan.Raw.IsNull() {
+		return
+	}
+
+	var dnsProvider types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("dns_provider"), &dnsProvider)...)
+	if resp.Diagnostics.HasError() || dnsProvider.IsNull() || dnsProvider.IsUnknown() {
+		return
+	}
+
+	if !req.State.Raw.IsNull() {
+		var current types.String
+		resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("dns_provider"), &current)...)
+		if current.Equal(dnsProvider) {
+			return
+		}
+	}
+
+	providers, err := r.client.Certificates.DNSProviders()
+	if err != nil {
+		resp.Diagnostics.AddWarning("Unable to check the DNS provider", err.Error())
+		return
+	}
+	ids := make([]string, 0, len(providers))
+	for _, p := range providers {
+		ids = append(ids, p.ID)
+	}
+	if !slices.Contains(ids, dnsProvider.ValueString()) {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("dns_provider"),
+			"Unsupported DNS provider",
+			fmt.Sprintf("NPM doesn't support the DNS provider %q. Supported providers are: %s", dnsProvider.ValueString(), strings.Join(ids, ", ")),
+		)
 	}
 }
 
 func (r *letsencryptCertificateResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan models.LetsencryptCertificateModel
-	diags := req.Plan.Get(ctx, &plan)
-
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	var _certificate = sdk.CertificateBase{
-		DomainNames: utils.ReturnPointer([]string{}),
+		DomainNames: utils.ReturnPointer(models.StringValues(plan.DomainNames)),
 		Provider:    utils.ReturnPointer("letsencrypt"),
 		Meta: &sdk.CertificateMeta{
 			DNSChallenge: plan.DNSChallenge.ValueBoolPointer(),
 		},
 	}
 
-	if utils.CheckAttribute(r.client, &utils.FieldLetsencryptEmail) {
-		_certificate.Meta.LetsencryptAgree = utils.ReturnPointer(true)
-		_certificate.Meta.LetsencryptEmail = plan.LetsencryptEmail.ValueStringPointer()
-	}
-
 	if plan.DNSChallenge.ValueBool() {
 		_certificate.Meta.DNSProvider = plan.DNSProvider.ValueStringPointer()
 		_certificate.Meta.DNSProviderCredentials = plan.DNSProviderCredentials.ValueStringPointer()
-
 	}
 
-	if !plan.PropagationSeconds.IsNull() {
+	if !plan.PropagationSeconds.IsNull() && !plan.PropagationSeconds.IsUnknown() {
 		_certificate.Meta.PropagationSeconds = utils.ReturnPointer(int(plan.PropagationSeconds.ValueInt64()))
 	}
 
-	for _, domainName := range plan.DomainNames {
-		*_certificate.DomainNames = append(*_certificate.DomainNames, domainName.ValueString())
-	}
-
-	certificate, err := r.client.Certificates.Create(_certificate)
+	created, err := r.client.Certificates.Create(_certificate)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating certificate.",
@@ -211,127 +202,65 @@ func (r *letsencryptCertificateResource) Create(ctx context.Context, req resourc
 		return
 	}
 
-	plan.ID = types.StringValue(strconv.Itoa(certificate.ID))
-	plan.NiceName = types.StringValue(*certificate.NiceName)
-	plan.DNSChallenge = types.BoolValue(*certificate.Meta.DNSChallenge)
-	plan.DNSProvider = types.StringValue(*certificate.Meta.DNSProvider)
-
-	// The DNS provider credentials are only returned from the API in <2.13.0
-	if utils.CheckAttribute(r.client, &utils.ReturnDNSProviderCredentials) {
-		plan.DNSProviderCredentials = types.StringValue(*certificate.Meta.DNSProviderCredentials)
+	// Read it back, as the create response doesn't include everything
+	certificate, err := r.client.Certificates.Get(created.ID)
+	if err != nil {
+		certificate = created
+		resp.Diagnostics.AddWarning("Unable to read the certificate after creating it.", err.Error())
 	}
 
-	// The LetsencryptEmail and LetsencryptAgree are only present i
-	if utils.CheckAttribute(r.client, &utils.FieldLetsencryptEmail) {
-		plan.LetsencryptEmail = types.StringValue(*certificate.Meta.LetsencryptEmail)
-	}
-
-	// These aren't yet implemented in the GET request to the certificate
-	// plan.CN = types.StringValue(*certificate.Meta.LetsencryptCertificate.CN)
-	// plan.Issuer = types.StringValue(*certificate.Meta.LetsencryptCertificate.Issuer)
-	// plan.From = types.Int64Value(int64(*certificate.Meta.LetsencryptCertificate.Dates.From))
-	// plan.To = types.Int64Value(int64(*certificate.Meta.LetsencryptCertificate.Dates.To))
-
-	if certificate.Meta.PropagationSeconds != nil {
-		plan.PropagationSeconds = types.Int64Value(int64(*certificate.Meta.PropagationSeconds))
-	}
-
-	plan.DomainNames = []types.String{}
-	for _, domainName := range *certificate.DomainNames {
-		plan.DomainNames = append(plan.DomainNames, types.StringValue(domainName))
-	}
-
-	diags = resp.State.Set(ctx, plan)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
+	plan.FromAPI(certificate)
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *letsencryptCertificateResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-
 	var state models.LetsencryptCertificateModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
 	certificate, err := r.client.Certificates.Get(id)
 	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to read certificate with ID %s.", state.ID.ValueString()),
-			err.Error(),
-		)
+		handleReadError(ctx, resp, "certificate", state.ID, err)
 		return
 	}
 
-	state.NiceName = types.StringValue(*certificate.NiceName)
-	state.DNSChallenge = types.BoolValue(*certificate.Meta.DNSChallenge)
-	state.DNSProvider = types.StringValue(*certificate.Meta.DNSProvider)
-	state.PropagationSeconds = types.Int64Value(int64(*certificate.Meta.PropagationSeconds))
+	state.FromAPI(certificate)
+	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
 
-	if utils.CheckAttribute(r.client, &utils.FieldLetsencryptEmail) {
-		state.LetsencryptEmail = types.StringValue(*certificate.Meta.LetsencryptEmail)
-	}
-
-	// The DNS provider credentials are only returned from the API in <2.13.0
-	if utils.CheckAttribute(r.client, &utils.ReturnDNSProviderCredentials) {
-		state.DNSProviderCredentials = types.StringValue(*certificate.Meta.DNSProviderCredentials)
-	}
-
-	// These aren't yet implemented in the GET request to the certificate
-	// state.CN = types.StringValue(*certificate.Meta.LetsencryptCertificate.CN)
-	// state.Issuer = types.StringValue(*certificate.Meta.LetsencryptCertificate.Issuer)
-	// state.From = types.Int64Value(int64(*certificate.Meta.LetsencryptCertificate.Dates.From))
-	// state.To = types.Int64Value(int64(*certificate.Meta.LetsencryptCertificate.Dates.To))
-
-	state.DomainNames = []types.String{}
-	for _, domainName := range *certificate.DomainNames {
-		state.DomainNames = append(state.DomainNames, types.StringValue(domainName))
-	}
-
-	diags = resp.State.Set(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+// Certificates can't be changed in NPM, so everything that matters requires
+// replacement. What's left to update are the values NPM doesn't return,
+// which are only kept in state.
+func (r *letsencryptCertificateResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var plan models.LetsencryptCertificateModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-}
-
-// The update function doesn't do anything as all attributes require replacement
-// but is implements to fit the interface requirements.
-func (r *letsencryptCertificateResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
 }
 
 func (r *letsencryptCertificateResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-
 	var state models.LetsencryptCertificateModel
-	diags := req.State.Get(ctx, &state)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	id, err := strconv.Atoi(state.ID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			fmt.Sprintf("Unable to convert ID value %s to int type", state.ID),
-			err.Error(),
-		)
+	id, ok := parseID(state.ID, &resp.Diagnostics)
+	if !ok {
 		return
 	}
 
-	err = r.client.Certificates.Delete(id)
-	if err != nil {
+	err := r.client.Certificates.Delete(id)
+	if err != nil && !sdk.IsNotFound(err) {
 		resp.Diagnostics.AddError(
 			"Error deleting certificate",
 			fmt.Sprintf("Unable to delete certificate, unexpected error: %s", err.Error()),
@@ -344,5 +273,5 @@ func (r *letsencryptCertificateResource) Configure(_ context.Context, req resour
 }
 
 func (r *letsencryptCertificateResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	importNumericID(ctx, req, resp)
 }

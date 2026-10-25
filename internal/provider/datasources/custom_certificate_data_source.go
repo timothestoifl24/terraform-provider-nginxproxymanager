@@ -13,7 +13,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
 var (
@@ -50,6 +49,7 @@ func (r *customCertificateDataSource) Schema(_ context.Context, _ datasource.Sch
 			},
 			"certificate_key": schema.StringAttribute{
 				Computed:    true,
+				Sensitive:   true,
 				Description: "Private key of the certificate in PEM format.",
 			},
 			// Not implemented in the return from the API request
@@ -88,9 +88,7 @@ func (r *customCertificateDataSource) Read(ctx context.Context, req datasource.R
 		return
 	}
 
-	state.NiceName = types.StringValue(*certificate.NiceName)
-	state.Certificate = types.StringValue(*certificate.Meta.Certificate)
-	state.CertificateKey = types.StringValue(*certificate.Meta.CertificateKey)
+	state.FromAPI(certificate)
 
 	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)

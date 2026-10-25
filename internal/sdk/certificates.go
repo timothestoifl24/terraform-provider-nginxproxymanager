@@ -23,15 +23,17 @@ type LetsencryptCertificate struct {
 }
 
 type CertificateMeta struct {
-	Certificate            *string                 `json:"certificate,omitempty"`
-	CertificateKey         *string                 `json:"certificate_key,omitempty"`
-	DNSChallenge           *bool                   `json:"dns_challenge,omitempty"`
-	DNSProvider            *string                 `json:"dns_provider,omitempty"`
-	DNSProviderCredentials *string                 `json:"dns_provider_credentials,omitempty"`
-	LetsencryptAgree       *bool                   `json:"letsencrypt_agree,omitempty" proto.constraint:"< 2.13"`
-	LetsencryptCertificate *LetsencryptCertificate `json:"letsencrypt_certificate,omitempty"`
-	LetsencryptEmail       *string                 `json:"letsencrypt_email,omitempty"  proto.constraint:"< 2.13"`
-	PropagationSeconds     *int                    `json:"propagation_seconds,omitempty"`
+	Certificate    *string `json:"certificate,omitempty"`
+	CertificateKey *string `json:"certificate_key,omitempty"`
+	// Only returned, it's uploaded with the certificate and key
+	IntermediateCertificate *string                 `json:"intermediate_certificate,omitempty"`
+	DNSChallenge            *bool                   `json:"dns_challenge,omitempty"`
+	DNSProvider             *string                 `json:"dns_provider,omitempty"`
+	DNSProviderCredentials  *string                 `json:"dns_provider_credentials,omitempty"`
+	LetsencryptAgree        *bool                   `json:"letsencrypt_agree,omitempty" proto.constraint:"< 2.13"`
+	LetsencryptCertificate  *LetsencryptCertificate `json:"letsencrypt_certificate,omitempty"`
+	LetsencryptEmail        *string                 `json:"letsencrypt_email,omitempty"  proto.constraint:"< 2.13"`
+	PropagationSeconds      *int                    `json:"propagation_seconds,omitempty"`
 }
 
 type CertificateBase struct {
@@ -157,4 +159,29 @@ func (o certObject) ClientVersion() *version.Version {
 
 func (o certObject) GetWriteOnlyFields() []string {
 	return o.writeOnlyFields
+}
+
+type DNSProvider struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Credentials string `json:"credentials"`
+}
+
+// DNSProviders lists the DNS providers the running NPM supports for DNS
+// challenges, with an example of the credentials each one expects.
+func (o certObject) DNSProviders() (providers []DNSProvider, err error) {
+	response, err := o.client.NewRequest(
+		fmt.Sprintf("%s/dns-providers", o.apiPath),
+		http.MethodGet,
+		nil,
+		true,
+		nil,
+	)
+	if err != nil {
+		return providers, fmt.Errorf("unable to list DNS providers: %w", err)
+	}
+	if err = json.Unmarshal(response, &providers); err != nil {
+		return providers, fmt.Errorf("unable to unmarshal json response: %s", err)
+	}
+	return providers, nil
 }
